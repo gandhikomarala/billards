@@ -6,7 +6,7 @@ CueMasters Pro — 8-Ball & Snooker Physics Engine is a production-grade enterpr
 
 ## Dependencies
 
-* **Runtime**: Python 3.10+ / Node.js 18+
+* **Runtime**: Python 3.10+
 * **Framework**: FastAPI, Uvicorn, Pydantic v2
 * **Quality & Test**: Pytest, Pytest-cov
 * **Frontend**: HTML5 Canvas / ES6+, Zero-Dependency Web Client
@@ -17,7 +17,7 @@ CueMasters Pro — 8-Ball & Snooker Physics Engine is a production-grade enterpr
 
 ### 1. Set Up Python Virtual Environment
 ```bash
-git clone gandhikomarala/billards.git
+git clone git@github.com:gandhikomarala/billards.git
 cd billards
 python -m venv venv
 # Windows:
