@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>CUE MASTERS — Digital 8-Ball Billiards</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: radial-gradient(circle at center, #064e3b 0%, #0f172a 70%, #020617 100%);
+      color: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      touch-action: none;
+    }
+
+    #game-container {
+      position: relative;
+      width: min(94vw, 840px);
+      height: min(48vw, 440px);
+      box-shadow: 0 15px 50px rgba(0, 0, 0, 0.8), 0 0 40px rgba(16, 185, 129, 0.3);
+      border-radius: 20px;
+      overflow: hidden;
+    }
+
+    #game-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: crosshair;
+    }
+
+    /* HUD OVERLAY */
+    #hud-top {
+      position: absolute;
+      top: 14px;
+      left: 20px;
+      right: 20px;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .hud-badge {
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(12px);
+      padding: 8px 20px;
+      border-radius: 20px;
+      border: 1.5px solid rgba(16, 185, 129, 0.5);
+      font-size: 15px;
+      font-weight: 800;
+      color: #34d399;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    }
+
+    /* MODALS */
+    .game-modal {
+      position: absolute;
+      inset: 0;
+      z-index: 50;
+      background: rgba(15, 23, 42, 0.94);
+      backdrop-filter: blur(16px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .modal-title {
+      font-size: 38px;
+      font-weight: 900;
+      color: #34d399;
+      letter-spacing: 2px;
+      text-shadow: 0 0 25px rgba(52, 211, 153, 0.7);
+    }
+
+    .btn-play-primary {
+      margin-top: 24px;
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      border: none;
+      padding: 16px 48px;
+      border-radius: 32px;
+      color: #fff;
+      font-size: 18px;
+      font-weight: 900;
+      cursor: pointer;
+      box-shadow: 0 8px 30px rgba(16, 185, 129, 0.6);
+      transition: transform 0.15s;
+    }
+
+    .btn-play-primary:hover { transform: scale(1.06); }
+    .btn-play-primary:active { transform: scale(0.95); }
+  </style>
+</head>
+<body>
+
+<div id="game-container">
+  <canvas id="game-canvas"></canvas>
+
+  <div id="hud-top">
+    <div class="hud-badge">🎱 SCORE: <span id="lbl-score">0</span></div>
+    <div class="hud-badge" style="border-color:#facc15; color:#facc15;">🏆 POCKETED: <span id="lbl-pocketed">0 / 15</span></div>
+    <div class="hud-badge" style="border-color:#ef4444; color:#f87171;">⚠️ FOULS: <span id="lbl-fouls">0</span></div>
+  </div>
+
+  <!-- START MODAL -->
+  <div class="game-modal" id="start-modal">
+    <h1 class="modal-title">🎱 CUE MASTERS</h1>
+    <p style="color:#94a3b8; font-size:14px; margin-top:10px; max-width:340px;">
+      Aim your cue stick by rotating around the white cue ball. Click/Touch & Drag backwards to adjust shot power, then release to pocket balls into the 6 table pockets!
+    </p>
+    <div style="margin-top:16px; font-size:13px; color:#38bdf8; font-weight:700;">
+      Solids 1-7 • 8-Ball (Black) • Stripes 9-15
+    </div>
+    <button class="btn-play-primary" id="btn-start-game">BREAK RACK</button>
+  </div>
+</div>
+
+<!-- AUDIO SYNTHESIS -->
+<script>
+class PoolAudio {
+  constructor() { this.ctx = null; }
+  init() { if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+  play(f, d = 0.08, type = "triangle", gain = 0.25) {
+    try {
+      this.init();
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(f, this.ctx.currentTime);
+      g.gain.setValueAtTime(gain, this.ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + d);
+      osc.connect(g);
+      g.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + d);
+    } catch(e) {}
+  }
+}
+const sfx = new PoolAudio();
+</script>
+
+<!-- 2D POOL SIMULATION ENGINE -->
+<script>
+class CueMastersEngine {
+  constructor() {
+    this.canvas = document.getElementById("game-canvas");
+    this.ctx = this.canvas.getContext("2d");
+    this.width = 800;
+    this.height = 420;
+    this.canvas.width = this.width;
+    this.canvas.height = this.height;
+
+    this.tablePadding = 32;
+    this.pocketRadius = 24;
+
+    this.pockets = [
+      { x: this.tablePadding + 10, y: this.tablePadding + 10 },
+      { x: this.width / 2, y: this.tablePadding + 4 },
+      { x: this.width - this.tablePadding - 10, y: this.tablePadding + 10 },
+      { x: this.tablePadding + 10, y: this.height - this.tablePadding - 10 },
+      { x: this.width / 2, y: this.height - this.tablePadding - 4 },
+      { x: this.width - this.tablePadding - 10, y: this.height - this.tablePadding - 10 }
+    ];
+
+    this.ballRadius = 12;
+    this.balls = [];
+    this.cueBall = null;
+
+    this.aimAngle = 0;
+    this.isDragging = false;
+    this.dragStart = { x: 0, y: 0 };
+    this.dragPower = 0;
+    this.isShotActive = false;
+
+    this.score = 0;
+    this.pocketedCount = 0;
+    this.fouls = 0;
+
+    this.bindEvents();
+  }
+
+  setupRack() {
+    this.balls = [];
+    this.score = 0;
+    this.pocketedCount = 0;
+    this.fouls = 0;
+
+    // Cue Ball (White)
+    this.cueBall = {
+      x: this.width * 0.28,
+      y: this.height * 0.5,
+      vx: 0, vy: 0,
+      number: 0,
+      color: "#f8fafc",
+      isCue: true
+    };
+    this.balls.push(this.cueBall);
+
+    // 15 Ball Triangle Rack at Foot Spot
+    const rackStartX = this.width * 0.68;
+    const rackStartY = this.height * 0.5;
+    const d = this.ballRadius * 2 + 1;
+
+    const ballColors = [
+      "#facc15", "#3b82f6", "#ef4444", "#a855f7", "#f97316", "#10b981", "#881337",
+      "#0f172a", // 8-Ball
+      "#facc15", "#3b82f6", "#ef4444", "#a855f7", "#f97316", "#10b981", "#881337"
+    ];
+
+    let ballIdx = 0;
+    for (let row = 0; row < 5; row++) {
+      const rx = rackStartX + row * (d * 0.866);
+      const startY = rackStartY - (row * d * 0.5);
+      for (let col = 0; col <= row; col++) {
+        const ry = startY + col * d;
+        const num = ballIdx + 1;
+        const color = ballColors[ballIdx];
+        const isStripe = num > 8;
+        this.balls.push({
+          x: rx,
+          y: ry,
+          vx: 0, vy: 0,
+          number: num,
+          color,
+          isStripe,
+          isCue: false
+        });
+        ballIdx++;
+      }
+    }
+  }
+
+  bindEvents() {
+    const getCanvasPos = (clientX, clientY) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const scaleX = this.width / rect.width;
+      const scaleY = this.height / rect.height;
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    };
+
+    const onPointerDown = (clientX, clientY) => {
+      if (this.isShotActive || !this.cueBall) return;
+      const pos = getCanvasPos(clientX, clientY);
+      this.isDragging = true;
+      this.dragStart = pos;
+    };
+
+    const onPointerMove = (clientX, clientY) => {
+      const pos = getCanvasPos(clientX, clientY);
+      if (!this.isShotActive && this.cueBall) {
+        if (!this.isDragging) {
+          // Aim angle tracks pointer around cue ball
+          this.aimAngle = Math.atan2(pos.y - this.cueBall.y, pos.x - this.cueBall.x);
+        } else {
+          // Pullback distance tracks power
+          const dx = pos.x - this.dragStart.x;
+          const dy = pos.y - this.dragStart.y;
+          this.dragPower = Math.min(100, Math.hypot(dx, dy));
+        }
+      }
+    };
+
+    const onPointerUp = () => {
+      if (!this.isDragging || !this.cueBall) return;
+      this.isDragging = false;
+
+      if (this.dragPower > 8) {
+        const force = this.dragPower * 0.24;
+        this.cueBall.vx = Math.cos(this.aimAngle) * force;
+        this.cueBall.vy = Math.sin(this.aimAngle) * force;
+        this.isShotActive = true;
+        sfx.play(600, 0.1, "triangle", 0.3);
+      }
+      this.dragPower = 0;
+    };
+
+    // Mouse
+    this.canvas.addEventListener("mousedown", (e) => onPointerDown(e.clientX, e.clientY));
+    window.addEventListener("mousemove", (e) => onPointerMove(e.clientX, e.clientY));
+    window.addEventListener("mouseup", onPointerUp);
+
+    // Touch
+    this.canvas.addEventListener("touchstart", (e) => onPointerDown(e.touches[0].clientX, e.touches[0].clientY));
+    window.addEventListener("touchmove", (e) => onPointerMove(e.touches[0].clientX, e.touches[0].clientY));
+    window.addEventListener("touchend", onPointerUp);
+
+    document.getElementById("btn-start-game").onclick = () => {
+      document.getElementById("start-modal").style.display = "none";
+      this.setupRack();
+      this.updateHUD();
+      requestAnimationFrame(this.gameLoop.bind(this));
+    };
+  }
+
+  updateHUD() {
+    document.getElementById("lbl-score").innerText = this.score;
+    document.getElementById("lbl-pocketed").innerText = `${this.pocketedCount} / 15`;
+    document.getElementById("lbl-fouls").innerText = this.fouls;
+  }
+
+  gameLoop() {
+    this.updatePhysics();
+    this.drawTable();
+    requestAnimationFrame(this.gameLoop.bind(this));
+  }
+
+  updatePhysics() {
+    const friction = 0.988;
+    const minX = this.tablePadding + this.ballRadius + 8;
+    const maxX = this.width - this.tablePadding - this.ballRadius - 8;
+    const minY = this.tablePadding + this.ballRadius + 8;
+    const maxY = this.height - this.tablePadding - this.ballRadius - 8;
+
+    // Move Balls
+    for (let b of this.balls) {
+      b.x += b.vx;
+      b.y += b.vy;
+      b.vx *= friction;
+      b.vy *= friction;
+
+      if (Math.hypot(b.vx, b.vy) < 0.03) {
+        b.vx = 0;
+        b.vy = 0;
+      }
+
+      // Cushion Bounces
+      if (b.x < minX) { b.x = minX; b.vx *= -0.85; sfx.play(220, 0.04, "sine", 0.1); }
+      if (b.x > maxX) { b.x = maxX; b.vx *= -0.85; sfx.play(220, 0.04, "sine", 0.1); }
+      if (b.y < minY) { b.y = minY; b.vy *= -0.85; sfx.play(220, 0.04, "sine", 0.1); }
+      if (b.y > maxY) { b.y = maxY; b.vy *= -0.85; sfx.play(220, 0.04, "sine", 0.1); }
+    }
+
+    // Ball-to-Ball Collisions
+    for (let i = 0; i < this.balls.length; i++) {
+      for (let j = i + 1; j < this.balls.length; j++) {
+        const b1 = this.balls[i];
+        const b2 = this.balls[j];
+        const dx = b2.x - b1.x;
+        const dy = b2.y - b1.y;
+        const dist = Math.hypot(dx, dy);
+        const minDist = this.ballRadius * 2;
+
+        if (dist < minDist && dist > 0) {
+          const nx = dx / dist;
+          const ny = dy / dist;
+          const overlap = (minDist - dist) / 2;
+
+          b1.x -= nx * overlap;
+          b1.y -= ny * overlap;
+          b2.x += nx * overlap;
+          b2.y += ny * overlap;
+
+          const kx = b1.vx - b2.vx;
+          const ky = b1.vy - b2.vy;
+          const p = 2 * (nx * kx + ny * ky) / 2.0;
+
+          b1.vx -= p * nx * 0.95;
+          b1.vy -= p * ny * 0.95;
+          b2.vx += p * nx * 0.95;
+          b2.vy += p * ny * 0.95;
+
+          sfx.play(520 + Math.random() * 200, 0.05, "triangle", 0.2);
+        }
+      }
+    }
+
+    // Check Pockets
+    for (let i = this.balls.length - 1; i >= 0; i--) {
+      const b = this.balls[i];
+      for (let pocket of this.pockets) {
+        if (Math.hypot(b.x - pocket.x, b.y - pocket.y) < this.pocketRadius - 2) {
+          sfx.play(750, 0.2, "sine", 0.3);
+          if (b.isCue) {
+            // Scratch Foul
+            this.fouls++;
+            this.cueBall.x = this.width * 0.28;
+            this.cueBall.y = this.height * 0.5;
+            this.cueBall.vx = 0;
+            this.cueBall.vy = 0;
+          } else {
+            this.pocketedCount++;
+            this.score += b.number === 8 ? 200 : 50;
+            this.balls.splice(i, 1);
+          }
+          this.updateHUD();
+          break;
+        }
+      }
+    }
+
+    // Check Motion Settlement
+    if (this.isShotActive) {
+      let isResting = true;
+      for (let b of this.balls) {
+        if (Math.hypot(b.vx, b.vy) > 0.04) {
+          isResting = false;
+          break;
+        }
+      }
+      if (isResting) {
+        this.isShotActive = false;
+      }
+    }
+  }
+
+  drawTable() {
+    this.ctx.clearRect(0, 0, this.width, this.height);
+
+    // Outer Wooden Rail
+    this.ctx.fillStyle = "#3b1d11";
+    this.ctx.fillRect(0, 0, this.width, this.height);
+
+    // Inner Green Felt
+    this.ctx.fillStyle = "#065f46";
+    this.ctx.fillRect(this.tablePadding, this.tablePadding, this.width - this.tablePadding * 2, this.height - this.tablePadding * 2);
+
+    // 6 Pockets
+    for (let p of this.pockets) {
+      this.ctx.fillStyle = "#020617";
+      this.ctx.beginPath();
+      this.ctx.arc(p.x, p.y, this.pocketRadius, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.strokeStyle = "#92400e";
+      this.ctx.lineWidth = 3;
+      this.ctx.stroke();
+    }
+
+    // Draw Balls
+    for (let b of this.balls) {
+      this.ctx.fillStyle = b.color;
+      this.ctx.beginPath();
+      this.ctx.arc(b.x, b.y, this.ballRadius, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.strokeStyle = "rgba(0,0,0,0.3)";
+      this.ctx.lineWidth = 1.5;
+      this.ctx.stroke();
+
+      if (b.isStripe) {
+        this.ctx.fillStyle = "#ffffff";
+        this.ctx.beginPath();
+        this.ctx.arc(b.x, b.y, this.ballRadius * 0.45, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
+    }
+
+    // Draw Cue Stick & Aim Line
+    if (!this.isShotActive && this.cueBall) {
+      const aimDist = 220;
+      const targetX = this.cueBall.x + Math.cos(this.aimAngle) * aimDist;
+      const targetY = this.cueBall.y + Math.sin(this.aimAngle) * aimDist;
+
+      // Dashed Aim Line
+      this.ctx.strokeStyle = "rgba(250, 204, 21, 0.7)";
+      this.ctx.lineWidth = 2;
+      this.ctx.setLineDash([6, 6]);
+      this.ctx.beginPath();
+      this.ctx.moveTo(this.cueBall.x, this.cueBall.y);
+      this.ctx.lineTo(targetX, targetY);
+      this.ctx.stroke();
+      this.ctx.setLineDash([]);
+
+      // Cue Stick Graphic
+      const pullback = this.dragPower * 0.8;
+      const cueStartDist = this.ballRadius + 10 + pullback;
+      const cueLen = 160;
+
+      const cueStartX = this.cueBall.x - Math.cos(this.aimAngle) * cueStartDist;
+      const cueStartY = this.cueBall.y - Math.sin(this.aimAngle) * cueStartDist;
+      const cueEndX = this.cueBall.x - Math.cos(this.aimAngle) * (cueStartDist + cueLen);
+      const cueEndY = this.cueBall.y - Math.sin(this.aimAngle) * (cueStartDist + cueLen);
+
+      this.ctx.strokeStyle = "#d97706";
+      this.ctx.lineWidth = 6;
+      this.ctx.lineCap = "round";
+      this.ctx.beginPath();
+      this.ctx.moveTo(cueStartX, cueStartY);
+      this.ctx.lineTo(cueEndX, cueEndY);
+      this.ctx.stroke();
+
+      // Power Glow
+      if (this.dragPower > 5) {
+        this.ctx.strokeStyle = "rgba(239, 68, 68, 0.8)";
+        this.ctx.lineWidth = 8;
+        this.ctx.beginPath();
+        this.ctx.moveTo(cueStartX, cueStartY);
+        this.ctx.lineTo(cueStartX - Math.cos(this.aimAngle) * (this.dragPower * 0.6), cueStartY - Math.sin(this.aimAngle) * (this.dragPower * 0.6));
+        this.ctx.stroke();
+      }
+    }
+  }
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  window.game = new CueMastersEngine();
+});
+</script>
+
+</body>
+</html>
